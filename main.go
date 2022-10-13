@@ -41,21 +41,18 @@ func main() {
 // get all non-archived repos for an org
 func getReposList() []github.Repository {
 	client := newGitHubClient()
-	repos, res, err := client.Repositories.ListByOrg(context.Background(), os.Getenv("GH_ORG"), &github.RepositoryListByOrgOptions{
+	repos, _, err := client.Repositories.ListByOrg(context.Background(), os.Getenv("GH_ORG"), &github.RepositoryListByOrgOptions{
 		ListOptions: github.ListOptions{PerPage: 1000},
 		Type:        "all",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%v\n", res)
 
 	var reposList []github.Repository
 	for _, repo := range repos {
 		if !repo.GetArchived() {
 			reposList = append(reposList, *repo)
-		} else {
-			fmt.Printf("Skipping archived repo %s\n", *repo.FullName)
 		}
 	}
 
