@@ -17,24 +17,56 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type OpenAPIRepo struct {
+	Name      string
+	FilePaths []string
+}
+
 func init() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+	fmt.Printf("Searching for repos with OpenAPI specs in GH org '%s'\n", os.Getenv("GH_ORG"))
 }
 
 func main() {
 	repos := getReposList()
 
+	openAPIRepos := []OpenAPIRepo{}
+	errors := []error{}
+	fmt.Printf("Examining %d repos", len(repos))
 	for _, repo := range repos {
-		// fmt.Println(*repo.FullName)
 		cloneDir, err := cloneRepo(&repo)
 		if err != nil {
-			fmt.Println(err)
+			errors = append(errors, fmt.Errorf("Error cloning %s: %s", *repo.FullName, err))
 			continue
 		}
-		findOpenAPIFiles(cloneDir, repo)
+
+		files, err := findOpenAPIFiles(cloneDir, repo)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if len(files) > 0 {
+			openAPIRepos = append(openAPIRepos, OpenAPIRepo{
+				Name:      *repo.FullName,
+				FilePaths: files,
+			})
+		}
+	}
+	fmt.Print("Done!\n\n")
+
+	for _, repo := range openAPIRepos {
+		fmt.Println(repo.Name)
+		for _, path := range repo.FilePaths {
+			fmt.Printf("- %s\n", path)
+		}
+	}
+
+	fmt.Println("")
+	for _, err := range errors {
+		fmt.Println(err)
 	}
 }
 
@@ -69,7 +101,8 @@ func newGitHubClient() *github.Client {
 }
 
 func cloneRepo(repo *github.Repository) (directory string, err error) {
-	fmt.Printf("Cloning %s...\n", *repo.FullName)
+	fmt.Print(".")
+	// fmt.Printf("Cloning %s...\n", *repo.FullName)
 	directory = "/tmp/crawler/" + *repo.FullName
 	_, err = git.PlainClone(directory, false, &git.CloneOptions{
 		Auth: &http.BasicAuth{
@@ -87,40 +120,43 @@ func cloneRepo(repo *github.Repository) (directory string, err error) {
 	return directory, nil
 }
 
-func findOpenAPIFiles(directory string, gitHubRepo github.Repository) {
+func findOpenAPIFiles(directory string, gitHubRepo github.Repository) ([]string, error) {
 	repo, err := git.PlainOpen(directory)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	h, err := repo.ResolveRevision(plumbing.Revision("HEAD"))
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	commit, err := repo.CommitObject(plumbing.NewHash(h.String()))
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	// var openAPIFiles []string
+	var paths []string
+	ymlRegex := regexp.MustCompile(".(yml|yaml)")
+	openAPIRegex := regexp.MustCompile("^openapi: \"\\d.\\d.\\d\"")
+
 	tree.Files().ForEach(func(f *object.File) error {
-		if match, _ := regexp.MatchString(".(yml|yaml)", f.Name); match {
-			// spew.Dump(f.Name)
-			of, err := os.Open(directory + "/" + f.Name)
+		if match := ymlRegex.MatchString(f.Name); match {
+			repoPath := fmt.Sprintf("%s/%s", directory, f.Name)
+			of, err := os.Open(repoPath)
 			if err != nil {
 				log.Fatal(err)
 			}
 
 			scanner := bufio.NewScanner(of)
 			for scanner.Scan() {
-				if match, _ := regexp.MatchString("^openapi: \"\\d.\\d.\\d\"", scanner.Text()); match {
-					fmt.Printf("\tOpenAPI spec found! %s\n", f.Name)
+				if match := openAPIRegex.MatchString(scanner.Text()); match {
+					paths = append(paths, f.Name)
 				}
 			}
 		}
@@ -131,4 +167,6 @@ func findOpenAPIFiles(directory string, gitHubRepo github.Repository) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	return paths, nil
 }
